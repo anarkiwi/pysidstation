@@ -124,6 +124,13 @@ ruff check .
 ruff format --check .
 ```
 
+The test suite uses Elektron's factory preset bank as a fixture. That file is
+Elektron's copyrighted content and is **not** committed here — `tests/conftest.py`
+downloads it on demand from Elektron's [official SidStation Sound Pack
+archive](https://www.elektron.se/support-downloads/sidstation), verifies its
+SHA-256, and caches it locally. To run offline, point `SIDSTATION_PRESETS` at a
+local copy; if it can't be obtained, the dependent tests are skipped.
+
 All tests run in CI (GitHub Actions) across Python 3.10–3.13, and the
 distribution is built and checked there too. The lint job uses the pinned
 `ruff` from the `lint` extra, which Dependabot keeps current.

@@ -29,6 +29,14 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
+      # The preset bank is downloaded from Elektron on demand by the tests;
+      # cache it so we are kind to their servers and resilient to blips.
+      - name: Cache the Elektron preset fixture
+        uses: actions/cache@v4
+        with:
+          path: tests/data
+          key: sidstation-presets-${{ hashFiles('tests/conftest.py') }}
+
       - name: Install package and test dependencies
         run: |
           python -m pip install --upgrade pip

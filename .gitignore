@@ -216,3 +216,7 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Test fixtures fetched on demand from Elektron (copyrighted; never committed).
+# See tests/conftest.py.
+/tests/data/*.syx
