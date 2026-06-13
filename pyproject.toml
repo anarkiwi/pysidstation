@@ -49,9 +49,12 @@ Issues = "https://github.com/anarkiwi/pysidstation/issues"
 dev = ["pytest>=7"]
 # Pinned so the lint job is reproducible; Dependabot opens PRs to bump it.
 lint = ["ruff==0.15.17"]
+# Audio rendering via the reSIDfp SID emulator (sidstation-render).
+render = ["pyresidfp>=0.17"]
 
 [project.scripts]
 sidstation = "sidstation.cli:main"
+sidstation-render = "sidstation.render:main"
 
 [tool.hatch.version]
 path = "src/sidstation/__init__.py"

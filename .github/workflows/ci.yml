@@ -45,6 +45,21 @@ jobs:
       - name: Run tests
         run: python -m pytest -ra
 
+  render:
+    name: Render smoke test (reSIDfp)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install with the render extra (pyresidfp)
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev,render]"
+      - name: Run renderer tests
+        run: python -m pytest tests/test_render.py -ra
+
   lint:
     name: Lint and format check
     runs-on: ubuntu-latest

@@ -102,6 +102,31 @@ sidstation show  SidStation_Presets_r1.syx 0 # detail for patch 0
 
 (Equivalently `python -m sidstation ...`.)
 
+## Rendering a patch to audio
+
+The optional `render` extra adds `sidstation-render`, which plays a patch
+through the [reSIDfp](https://pypi.org/project/pyresidfp/) SID emulator and
+writes a WAV:
+
+```bash
+pip install "pysidstation[render]"
+
+sidstation-render --syx SidStation_Presets_r1.syx --patch "Snare Std" \
+    --clock pal --note 60 --duration 0.5 --knob1 90 --knob2 40 --out snare.wav
+```
+
+Arguments: `--clock {pal,ntsc}` clock source, `--model {6581,8580}`, `--note`
+(MIDI 0–127), `--duration`/`--release` (seconds), and `--knob1`…`--knob4`
+(0–127). The knobs map to four render macros — cutoff, resonance, pulse width,
+master volume — and default to the patch's own values when omitted.
+
+This is a **static** render: it maps the patch onto the SID's registers and
+plays one note (a table-driven voice uses its first table step so drums still
+sound). The SidStation firmware's real-time modulation — LFOs, arpeggiator, full
+wavetables, PWM sweeps — is not reproduced. The pure patch→register translation
+(`sidstation.render.patch_to_sid_registers`) has no dependencies and is unit
+tested; only the audio step needs `pyresidfp`.
+
 ## A couple of things the manual gets wrong
 
 `pysidstation` is built from the owner's manual *and* verified against a real
