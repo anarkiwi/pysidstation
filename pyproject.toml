@@ -1,0 +1,80 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "pysidstation"
+dynamic = ["version"]
+description = "Read and write Elektron SidStation patch (.syx) SysEx files"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [{ name = "Josh Bailey", email = "josh@overlyspecific.com" }]
+keywords = [
+    "sidstation",
+    "elektron",
+    "sysex",
+    "midi",
+    "sid",
+    "mos6581",
+    "synthesizer",
+    "patch",
+    "preset",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: Multimedia :: Sound/Audio :: MIDI",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Typing :: Typed",
+]
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/anarkiwi/pysidstation"
+Repository = "https://github.com/anarkiwi/pysidstation"
+Documentation = "https://github.com/anarkiwi/pysidstation/blob/main/docs/FORMAT.md"
+Issues = "https://github.com/anarkiwi/pysidstation/issues"
+
+[project.optional-dependencies]
+dev = ["pytest>=7"]
+# Pinned so the lint job is reproducible; Dependabot opens PRs to bump it.
+lint = ["ruff==0.15.17"]
+
+[project.scripts]
+sidstation = "sidstation.cli:main"
+
+[tool.hatch.version]
+path = "src/sidstation/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/sidstation"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/src",
+    "/tests",
+    "/docs",
+    "/README.md",
+    "/LICENSE",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B"]
