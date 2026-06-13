@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import os
-from typing import Iterator, Sequence, Union
+from collections.abc import Iterator, Sequence
+from typing import Union
 
 from ._codec import (
     ALL_CLEAR_MAGIC,

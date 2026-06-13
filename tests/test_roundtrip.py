@@ -16,7 +16,7 @@ def test_every_message_roundtrips_individually(presets_bytes):
     bank = sidstation.loads(presets_bytes)
     raw_messages = _codec.split_sysex(presets_bytes)
     assert len(raw_messages) == len(bank.messages)
-    for raw, message in zip(raw_messages, bank.messages):
+    for raw, message in zip(raw_messages, bank.messages, strict=True):
         assert message.to_sysex(bank.prefix) == raw
 
 
