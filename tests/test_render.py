@@ -125,6 +125,68 @@ def test_all_registers_present_and_in_range():
     assert all(0 <= v <= 0xFF for v in regs.values())
 
 
+# -- Dynamic modulation engine (pure, no pyresidfp) ---------------------------
+
+
+def _engine(patch, note=60, **kw):
+    from sidstation.render import PatchEngine
+
+    return PatchEngine(patch, note, PAL_CLOCK_HZ, tick_rate=50, **kw)
+
+
+def test_engine_steady_when_unmodulated():
+    eng = _engine(_saw_patch(), note=69)
+    fregs = {((r := eng.tick())[0x01] << 8) | r[0x00] for _ in range(12)}
+    assert len(fregs) == 1  # no modulation -> constant pitch
+
+
+def test_engine_table_steps_change_waveform():
+    p = Patch(name="Tbl")
+    p.osc1_enabled = True
+    p.oscillators[0].waveform = 0
+    p.oscillators[0].table_speed = 127  # advance quickly
+    tables = p.tables
+    tables[0].steps.append(TableStep(0x01, 0x00))  # Triangle
+    tables[0].steps.append(TableStep(0x04, 0x00))  # Pulse
+    tables[0].terminator = "loop"
+    tables[0].loop_point = 0
+    p.replace_tables(tables)
+    eng = _engine(p)
+    waveforms = {eng.tick()[0x04] & 0xF0 for _ in range(20)}
+    assert 0x10 in waveforms and 0x40 in waveforms  # both triangle and pulse seen
+
+
+def test_engine_filter_envelope_raises_cutoff():
+    p = _saw_patch()
+    p.filter_type = 1
+    p.filter_osc1 = True
+    p.filter_cutoff = 0
+    p.filter_env_depth = 127
+    p.filter_env_attack = 40
+    p.filter_env_sustain = 127
+    eng = _engine(p)
+    cutoffs = [((r := eng.tick())[0x16] << 3) | r[0x15] for _ in range(30)]
+    assert cutoffs[-1] > cutoffs[0]  # cutoff opens as the envelope attacks
+
+
+def test_engine_vibrato_modulates_pitch():
+    p = _saw_patch()
+    p.oscillators[0].vibrato_depth = 127
+    p.oscillators[0].vibrato_lfo = 0
+    p.lfos[0].lfo_type = 0  # triangle
+    p.lfos[0].speed = 127  # fast
+    eng = _engine(p, note=69)
+    fregs = {((r := eng.tick())[0x01] << 8) | r[0x00] for _ in range(40)}
+    assert len(fregs) > 5  # pitch wobbles
+
+
+def test_engine_note_off_clears_gate():
+    eng = _engine(_saw_patch(), note=69)
+    assert eng.tick()[0x04] & 0x01  # gated on
+    eng.note_off()
+    assert not eng.tick()[0x04] & 0x01  # gate released
+
+
 # -- Actual reSIDfp render (only when pyresidfp is installed) -----------------
 
 

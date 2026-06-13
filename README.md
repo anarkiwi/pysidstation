@@ -120,12 +120,17 @@ Arguments: `--clock {pal,ntsc}` clock source, `--model {6581,8580}`, `--note`
 (0–127). The knobs map to four render macros — cutoff, resonance, pulse width,
 master volume — and default to the patch's own values when omitted.
 
-This is a **static** render: it maps the patch onto the SID's registers and
-plays one note (a table-driven voice uses its first table step so drums still
-sound). The SidStation firmware's real-time modulation — LFOs, arpeggiator, full
-wavetables, PWM sweeps — is not reproduced. The pure patch→register translation
-(`sidstation.render.patch_to_sid_registers`) has no dependencies and is unit
-tested; only the audio step needs `pyresidfp`.
+By default it steps a **dynamic** modulation engine each tick (at the patch's
+sync speed): oscillator **wavetables**, the four **LFOs** (vibrato / PWM / filter
+cutoff), the software **filter envelope**, and the **PWM sweep** — so drums,
+arps and sweeps actually move. Pass `--static` for a single-snapshot render, or
+`--tick-rate HZ` to override the update rate. Not modelled: the arpeggiator and
+portamento (they need more than one note) and LFO lace / add / fade-in /
+controller routing.
+
+The pure patch→register translation (`patch_to_sid_registers`) and the engine
+(`PatchEngine`) have no dependencies and are unit tested; only the audio step
+needs `pyresidfp`.
 
 ## A couple of things the manual gets wrong
 

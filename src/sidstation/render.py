@@ -1,18 +1,20 @@
 """Render a SidStation patch to a WAV file through the reSIDfp SID emulation.
 
-This translates a patch into a **static** snapshot of the SID's 25 registers and
-plays one note through `pyresidfp` (the reSIDfp 6581/8580 emulator). It models
-the parts of a patch that map directly onto SID hardware:
+This plays one note of a patch through `pyresidfp` (the reSIDfp 6581/8580
+emulator) and maps the patch onto the SID hardware:
 
 * up to three oscillators -> SID voices 1-3 (waveform, ring-mod, sync, gate)
 * the SID ADSR envelope, pulse width, and the multimode filter
 * PAL/NTSC clock and 6581/8580 chip model
 
-It does **not** reproduce the SidStation firmware's real-time engine -- LFOs,
-arpeggiator, wavetables, PWM sweeps and portamento are not stepped over time. As
-a useful approximation, a voice whose static waveform is "off" but which has an
-active table is rendered using its *first* table step (waveform + note), so
-table-driven drums/leads still make a sound.
+By default it uses a **dynamic** engine (:class:`PatchEngine`) that re-steps the
+SidStation firmware's real-time modulation each tick (at the patch's local sync
+speed): oscillator wavetables, the four LFOs (vibrato / PWM / filter cutoff), the
+software filter envelope, and the PWM sweep. ``engine="static"`` instead writes a
+single register snapshot (:func:`patch_to_sid_registers`) and holds it.
+
+Not modelled: the arpeggiator and portamento (which need more than one note) and
+the LFO lace / add-LFO / fade-in / MIDI-controller routings.
 
 The four knobs map to four documented macro controls on the render (the
 SidStation's per-patch knob routing is not modelled):
@@ -156,6 +158,209 @@ def patch_to_sid_registers(
     return regs
 
 
+# -- Time-stepped modulation engine ------------------------------------------
+# These constants are approximations where the manual does not pin down exact
+# rates/depths; they are tuned to sound plausible and are easy to adjust.
+DEFAULT_TICK_RATE = 50.0  # Hz, when a patch's sync speed is unset/out of range
+LFO_MAX_HZ = 14.0  # LFO rate at speed 127
+VIBRATO_MAX_SEMITONES = 2.0  # pitch swing at vibrato depth 127
+DETUNE_MAX_SEMITONES = 0.5  # at detune extremes
+PWM_LFO_MAX = 1400  # 12-bit PW swing at PWM-LFO depth 127
+PWM_SWEEP_GAIN = 0.6  # 12-bit PW added per tick per unit of pwm_add
+FILTER_LFO_MAX = 1024  # 11-bit cutoff swing at filter-LFO depth 127
+FILTER_ENV_MAX = 2047  # 11-bit cutoff swing at filter-env depth 127
+TABLE_STEP_THRESHOLD = 64.0  # table advances when an accumulator of table_speed crosses this
+
+
+def _env_seconds(value: int) -> float:
+    """Map a 0..127 filter-envelope rate to a segment time in seconds (approx)."""
+    return 0.003 + (value / 127.0) ** 2 * 6.0
+
+
+class PatchEngine:
+    """A tick-based approximation of the SidStation firmware's voice engine.
+
+    Each tick (run at the patch's local update / "sync" speed) recomputes the
+    *time-varying* SID registers on top of the static snapshot from
+    :func:`patch_to_sid_registers`:
+
+    * **wavetables** -- per-oscillator tables step their waveform and note
+      (fixed / +offset / -offset), honouring LOOP and END
+    * **LFOs** -- triangle/saw/ramp/pulse/random/flat shapes routed to vibrato
+      (pitch), pulse width and filter cutoff
+    * **filter envelope** -- a software ADSR scaled by its depth, added to cutoff
+    * **PWM sweep** -- ``pwm_add`` ramps the pulse width
+
+    The SID's hardware handles the oscillator amplitude ADSR (gated once at
+    note-on). Not modelled: arpeggiator and portamento (need multiple notes),
+    and LFO lace / add-LFO / fade-in / controller routing.
+    """
+
+    def __init__(
+        self,
+        patch: Patch,
+        note: int,
+        clock_hz: float,
+        knobs=(None, None, None, None),
+        volume: int = DEFAULT_VOLUME,
+        tick_rate=None,
+    ):
+        self.patch = patch
+        self.note = note
+        self.clock_hz = clock_hz
+        sync = patch.sync_speed
+        self.tick_rate = float(tick_rate or (sync if 10 <= sync <= 400 else DEFAULT_TICK_RATE))
+        self.base = patch_to_sid_registers(patch, note, clock_hz, knobs=knobs, volume=volume)
+        self._base_cutoff = (self.base[FILTER_FC_HI] << 3) | self.base[FILTER_FC_LO]
+        self.gate_on = True
+        self.lfo_phase = [0.0, 0.0, 0.0, 0.0]
+        self._rng = (0x2545F491 ^ (note * 2654435761)) & 0xFFFFFFFF
+        self._rand_val = [0.0, 0.0, 0.0, 0.0]
+        self._rand_period = [-1, -1, -1, -1]
+        self.table_pos = [0, 0, 0]
+        self.table_acc = [0.0, 0.0, 0.0]
+        self.pwm_offset = [0.0, 0.0, 0.0]
+        self.fenv_level = 0.0
+        self.fenv_stage = "attack"
+
+    def note_off(self) -> None:
+        self.gate_on = False
+        self.fenv_stage = "release"
+
+    def _lfo_value(self, i: int) -> float:
+        lfo = self.patch.lfos[i & 3]
+        phase = self.lfo_phase[i & 3]
+        p = phase % 1.0
+        typ = lfo.lfo_type
+        if typ == 0:  # triangle
+            v = 1.0 - 4.0 * abs(p - 0.5)
+        elif typ == 1:  # saw up
+            v = 2.0 * p - 1.0
+        elif typ == 2:  # ramp down
+            v = 1.0 - 2.0 * p
+        elif typ == 3:  # pulse
+            v = 1.0 if p < 0.5 else -1.0
+        elif typ == 4:  # random sample & hold
+            period = int(phase)
+            if period != self._rand_period[i & 3]:
+                self._rand_period[i & 3] = period
+                self._rng = (1103515245 * self._rng + 12345) & 0x7FFFFFFF
+                self._rand_val[i & 3] = (self._rng / 0x7FFFFFFF) * 2.0 - 1.0
+            v = self._rand_val[i & 3]
+        else:  # flat / unknown -> no modulation
+            v = 0.0
+        if lfo.invert:
+            v = -v
+        if lfo.above_zero:
+            v = abs(v)
+        return v
+
+    def _table_step(self, i: int, osc, table):
+        # Read the current step first, then advance the counter for next tick,
+        # so the very first table entry actually plays.
+        n = len(table.steps)
+        pos = self.table_pos[i]
+        if pos >= n:
+            if table.terminator == "loop" and table.loop_point < n:
+                span = max(1, n - table.loop_point)
+                pos = table.loop_point + (pos - table.loop_point) % span
+            else:  # END (or no terminator): hold the last step
+                pos = n - 1
+            self.table_pos[i] = pos
+        step = table.steps[pos]
+        self.table_acc[i] += osc.table_speed
+        while self.table_acc[i] >= TABLE_STEP_THRESHOLD:
+            self.table_acc[i] -= TABLE_STEP_THRESHOLD
+            self.table_pos[i] += 1
+        return step
+
+    def _advance_fenv(self) -> float:
+        dt = 1.0 / self.tick_rate
+        p = self.patch
+        sustain = p.filter_env_sustain / 127.0
+        if self.fenv_stage == "attack":
+            self.fenv_level += dt / _env_seconds(p.filter_env_attack)
+            if self.fenv_level >= 1.0:
+                self.fenv_level, self.fenv_stage = 1.0, "decay"
+        elif self.fenv_stage == "decay":
+            self.fenv_level -= dt / _env_seconds(p.filter_env_decay)
+            if self.fenv_level <= sustain:
+                self.fenv_level, self.fenv_stage = sustain, "sustain"
+        elif self.fenv_stage == "sustain":
+            self.fenv_level = sustain
+        else:  # release
+            self.fenv_level = max(0.0, self.fenv_level - dt / _env_seconds(p.filter_env_release))
+        return self.fenv_level
+
+    def tick(self) -> dict:
+        """Advance one tick and return the SID register map for it."""
+        regs = dict(self.base)
+        for i, lfo in enumerate(self.patch.lfos):
+            self.lfo_phase[i] += (lfo.speed / 127.0) * LFO_MAX_HZ / self.tick_rate
+        fenv = self._advance_fenv()
+        enabled = (self.patch.osc1_enabled, self.patch.osc2_enabled, self.patch.osc3_enabled)
+
+        for i, osc in enumerate(self.patch.oscillators):
+            addr = VOICE_BASE[i]
+            table = self.patch.tables[i]
+            if osc.table_speed > 0 and table.steps:
+                step = self._table_step(i, osc, table)
+                wave_bits = (step.waveform & 0x0F) << 4
+                if step.note_mode == "fixed":
+                    eff_note = step.note_value
+                elif step.note_mode == "add":
+                    eff_note = self.note + step.note_value
+                else:
+                    eff_note = self.note - step.note_value
+                sync, ring = step.sync, step.ring_mod
+            else:
+                wave_bits = (osc.waveform & 0x0F) << 4
+                transpose = _signed8(osc.transpose)
+                eff_note = self.note + (transpose if -36 <= transpose <= 36 else 0)
+                sync, ring = osc.sync, osc.ring_mod
+
+            eff_note += (_signed8(osc.detune) / 128.0) * DETUNE_MAX_SEMITONES
+            if osc.vibrato_depth:
+                eff_note += (
+                    self._lfo_value(osc.vibrato_lfo)
+                    * (osc.vibrato_depth / 127.0)
+                    * VIBRATO_MAX_SEMITONES
+                )
+            freg = _hz_to_freg(_midi_to_hz(eff_note), self.clock_hz)
+            regs[addr + FREQ_LO] = freg & 0xFF
+            regs[addr + FREQ_HI] = (freg >> 8) & 0xFF
+
+            pw = osc.pwm_start * 32
+            if osc.pwm_add:
+                self.pwm_offset[i] = (self.pwm_offset[i] + osc.pwm_add * PWM_SWEEP_GAIN) % 4096
+            pw += self.pwm_offset[i]
+            if osc.pwm_lfo_depth:
+                pw += self._lfo_value(osc.pwm_lfo) * (osc.pwm_lfo_depth / 127.0) * PWM_LFO_MAX
+            pw = int(max(0, min(0xFFF, pw)))
+            regs[addr + PW_LO] = pw & 0xFF
+            regs[addr + PW_HI] = (pw >> 8) & 0x0F
+
+            control = wave_bits | (SYNC if sync else 0) | (RING_MOD if ring else 0)
+            if enabled[i] and wave_bits and self.gate_on:
+                control |= GATE
+            regs[addr + CONTROL] = control
+
+        cutoff = float(self._base_cutoff)
+        if self.patch.filter_env_depth:
+            contrib = fenv * (self.patch.filter_env_depth / 127.0) * FILTER_ENV_MAX
+            cutoff += -contrib if self.patch.filter_env_invert else contrib
+        if self.patch.filter_lfo_depth:
+            cutoff += (
+                self._lfo_value(self.patch.filter_lfo)
+                * (self.patch.filter_lfo_depth / 127.0)
+                * FILTER_LFO_MAX
+            )
+        cutoff = int(max(0, min(2047, cutoff)))
+        regs[FILTER_FC_LO] = cutoff & 0x07
+        regs[FILTER_FC_HI] = (cutoff >> 3) & 0xFF
+        return regs
+
+
 def render_patch(
     patch: Patch,
     note: int = 60,
@@ -166,11 +371,15 @@ def render_patch(
     sample_rate: int = 44100,
     release: float = 0.5,
     volume: int = DEFAULT_VOLUME,
+    engine: str = "dynamic",
+    tick_rate=None,
 ):
     """Render *patch* to mono 16-bit samples. Returns ``(sample_rate, samples)``.
 
     Plays the note for *duration* seconds (gate on), then releases for *release*
-    seconds (gate off) so the envelope tail is audible.
+    seconds (gate off). ``engine="dynamic"`` (default) steps the modulation
+    engine (:class:`PatchEngine`) each tick; ``engine="static"`` writes a single
+    register snapshot and holds it.
     """
     import datetime
 
@@ -187,15 +396,31 @@ def render_patch(
         sampling_frequency=float(sample_rate),
     )
     addr_to_reg = {int(reg): reg for reg in WritableRegister}
-    regs = patch_to_sid_registers(patch, note, clock_hz, knobs=knobs, volume=volume)
-    for addr, value in regs.items():
-        sid.write_register(addr_to_reg[addr], value & 0xFF)
 
-    samples = list(sid.clock(datetime.timedelta(seconds=max(0.0, duration))))
-    for base in VOICE_BASE:  # gate off -> release phase
-        ctrl = base + CONTROL
-        sid.write_register(addr_to_reg[ctrl], regs[ctrl] & ~GATE & 0xFF)
-    samples += list(sid.clock(datetime.timedelta(seconds=max(0.0, release))))
+    def write(regs):
+        for addr, value in regs.items():
+            sid.write_register(addr_to_reg[addr], value & 0xFF)
+
+    if engine == "static":
+        regs = patch_to_sid_registers(patch, note, clock_hz, knobs=knobs, volume=volume)
+        write(regs)
+        samples = list(sid.clock(datetime.timedelta(seconds=max(0.0, duration))))
+        for base in VOICE_BASE:
+            ctrl = base + CONTROL
+            sid.write_register(addr_to_reg[ctrl], regs[ctrl] & ~GATE & 0xFF)
+        samples += list(sid.clock(datetime.timedelta(seconds=max(0.0, release))))
+        return int(sample_rate), samples
+
+    eng = PatchEngine(patch, note, clock_hz, knobs=knobs, volume=volume, tick_rate=tick_rate)
+    step = datetime.timedelta(seconds=1.0 / eng.tick_rate)
+    samples = []
+    for _ in range(max(1, round(duration * eng.tick_rate))):
+        write(eng.tick())
+        samples += list(sid.clock(step))
+    eng.note_off()
+    for _ in range(max(0, round(release * eng.tick_rate))):
+        write(eng.tick())
+        samples += list(sid.clock(step))
     return int(sample_rate), samples
 
 
@@ -263,6 +488,17 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--rate", type=int, default=44100, help="output sample rate")
     for n in (1, 2, 3, 4):
         parser.add_argument(f"--knob{n}", type=_knob, default=None, help=f"knob {n} (0..127)")
+    parser.add_argument(
+        "--static",
+        action="store_true",
+        help="render a single register snapshot instead of stepping modulation",
+    )
+    parser.add_argument(
+        "--tick-rate",
+        type=float,
+        default=None,
+        help="modulation update rate in Hz (default: the patch's sync speed)",
+    )
     parser.add_argument("--out", help="output .wav path (default: <patch name>.wav)")
     return parser
 
@@ -274,6 +510,7 @@ def main(argv=None) -> int:
     knobs = (args.knob1, args.knob2, args.knob3, args.knob4)
     out = args.out or "".join(c if c.isalnum() else "_" for c in patch.name.strip()) + ".wav"
 
+    engine = "static" if args.static else "dynamic"
     sample_rate, samples = render_patch(
         patch,
         note=args.note,
@@ -283,19 +520,21 @@ def main(argv=None) -> int:
         knobs=knobs,
         sample_rate=args.rate,
         release=args.release,
+        engine=engine,
+        tick_rate=args.tick_rate,
     )
     write_wav(out, sample_rate, samples)
 
     peak = max((abs(s) for s in samples), default=0)
     print(
         f"rendered {patch.name!r}  note={args.note} {args.clock.upper()}/{args.model} "
-        f"knobs={knobs}  {len(samples)} samples @ {sample_rate} Hz  peak={peak}\n"
+        f"{engine}  knobs={knobs}  {len(samples)} samples @ {sample_rate} Hz  peak={peak}\n"
         f"wrote {out}"
     )
     if peak == 0:
         print(
-            "warning: output is silent (this patch may rely on modulation that "
-            "the static renderer does not model, or the voice is gated off)",
+            "warning: output is silent (the voice may be gated off, or relies on "
+            "modulation this renderer does not model)",
             file=sys.stderr,
         )
     return 0
