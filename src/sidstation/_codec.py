@@ -8,7 +8,7 @@ synth-specific semantics so it can be tested in isolation.
 
 from __future__ import annotations
 
-from typing import Iterable, Sequence
+from collections.abc import Iterable, Sequence
 
 from .exceptions import SysExParseError
 

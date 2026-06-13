@@ -17,7 +17,7 @@ The complete, corrected file format is documented in
 pip install pysidstation
 ```
 
-Requires Python 3.8+.
+Requires Python 3.10+.
 
 ## Quick start
 
@@ -124,9 +124,9 @@ ruff check .
 ruff format --check .
 ```
 
-All tests run in CI (GitHub Actions) across Python 3.8–3.13 on Linux, plus
-macOS and Windows, and the distribution is built and checked there too. The lint
-job uses the pinned `ruff` from the `lint` extra, which Dependabot keeps current.
+All tests run in CI (GitHub Actions) across Python 3.10–3.13, and the
+distribution is built and checked there too. The lint job uses the pinned
+`ruff` from the `lint` extra, which Dependabot keeps current.
 
 ## License
 
