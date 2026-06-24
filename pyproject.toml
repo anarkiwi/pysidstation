@@ -48,7 +48,7 @@ Issues = "https://github.com/anarkiwi/pysidstation/issues"
 [project.optional-dependencies]
 dev = ["pytest>=7"]
 # Pinned so the lint job is reproducible; Dependabot opens PRs to bump it.
-lint = ["ruff==0.15.17"]
+lint = ["ruff==0.15.18"]
 
 [project.scripts]
 sidstation = "sidstation.cli:main"
