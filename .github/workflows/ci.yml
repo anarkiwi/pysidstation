@@ -32,7 +32,7 @@ jobs:
       # The preset bank is downloaded from Elektron on demand by the tests;
       # cache it so we are kind to their servers and resilient to blips.
       - name: Cache the Elektron preset fixture
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: tests/data
           key: sidstation-presets-${{ hashFiles('tests/conftest.py') }}
