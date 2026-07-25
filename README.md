@@ -26,9 +26,9 @@ import sidstation
 
 bank = sidstation.read("SidStation_Presets_r1.syx")
 
-print(len(bank), "patches")          # 90 patches
+print(len(bank), "patches")  # 90 patches
 for patch in bank:
-    print(patch.name)                # Anpanman, Krutong, Floating-7, ...
+    print(patch.name)  # Anpanman, Krutong, Floating-7, ...
 
 # Edit a patch
 lead = bank[0]
@@ -60,7 +60,7 @@ p.oscillators[0].waveform = Waveform.PULSE
 p.oscillators[0].attack = 2
 p.oscillators[0].sustain = 12
 
-bank = Bank.from_patches([p])   # prepends the all-clear message by default
+bank = Bank.from_patches([p])  # prepends the all-clear message by default
 bank.write("init.syx")
 ```
 
