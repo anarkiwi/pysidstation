@@ -3,7 +3,7 @@
 Read and write **Elektron SidStation** patch (`.syx`) SysEx files in pure
 Python — no dependencies.
 
-The SidStation is a synthesizer built around the MOS 6581/8580 "SID" chip from
+The SidStation is a synthesizer built around the MOS 6581 "SID" chip from
 the Commodore 64. Its patches are exchanged as MIDI System Exclusive dumps.
 `pysidstation` parses those dumps into editable `Patch` objects and writes them
 back **byte-for-byte**.
